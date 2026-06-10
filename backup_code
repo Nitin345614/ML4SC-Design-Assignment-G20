@@ -1,0 +1,76 @@
+def eval_actor(actor_crit, env):
+    
+    with torch.no_grad():
+        rewards_acc = 0 
+        obs, info = env.reset() 
+        while True: 
+            state = obs
+            action = actor_crit.pi_d(state)
+            obs, reward, terminated, truncated, info = env.step(action)
+            rewards_acc += reward 
+            if terminated or truncated: 
+                return rewards_acc 
+
+def show(actor_crit,env):
+    #pi = lambda x: actor_crit.deterministic_actor(torch.tensor(x[None,:],dtype=torch.float32))[0].numpy()
+    #pi = numpy_wrapper(actor_crit.deterministic_actor)
+    with torch.no_grad():
+        try:
+            obs, info = env.reset() 
+            env.render() 
+            time.sleep(1) 
+            while True: 
+                state = obs
+                action = actor_crit.pi_d(state)
+                obs, reward, terminated, truncated, info = env.step(action) 
+                # time.sleep(1/60) 
+                env.render()
+                if terminated or truncated: 
+                    time.sleep(0.5) 
+                    break  
+        finally: #this will always run even when an error occurs
+            env.close()
+    
+def softmax(h):
+    hp = h-np.max(h)
+    return np.exp(hp)/np.sum(np.exp(hp))
+
+class disk:
+    def __init__(self):
+        self.env = gym_unbalanced_disk.UnbalancedDisk(dt=0.025, umax=3.) #alternative
+        self.obs, self.info = env.reset()
+
+    def example(self, steps):
+        env = self.env
+        try:
+            for i in range(steps):
+                self.obs, self.reward, terminated, truncated, info = env.step(env.action_space.sample()) #random action
+                #print(obs, reward)
+                env.render()
+                time.sleep(1/24)
+                if terminated or truncated:
+                    self.obs = env.reset()
+        finally: #this will always run
+            env.close()
+
+def GPR(self, state):
+        kernel = self.parameters
+        self.reg = GaussianProcessRegressor(kernel,alpha=10**-6, n_restarts_optimizer=10)
+        action, uncertainty = self.reg.predict(state, return_std=True)
+        return action, uncertainty
+
+
+actor_crit = ActorCritic(order=1)
+
+Observations, Actions, Means, Rewards, Terminal = rollout(actor_crit,env,N_rollout=200, eval_mode=False, render=True, verbose=False)
+print(f'Observations={Observations}')
+print(f'Actions={Actions}')
+print(f'Rewards={Rewards}')
+print(f'Terminal={Terminal}')
+
+plt.plot([rollout(actor_crit,env,N_rollout=20, eval_mode=True, render=False) for i in tqdm(range(20))],'.')
+plt.xlabel("trials")
+plt.ylabel("mean reward per step")
+
+env.close()
+plt.show()
