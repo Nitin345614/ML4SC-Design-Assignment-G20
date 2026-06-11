@@ -281,6 +281,7 @@ def show(Q,env):
         try:
             obs, info = env.reset() #b)
             Y = [obs]
+            U = [0]
             Rewards = [0]
             env.render() #b)
             time.sleep(1) #b)
@@ -288,6 +289,8 @@ def show(Q,env):
                 action = np.argmax(Qfun(obs)) #b)
                 obs, reward, terminated, truncated, info = env.step(action) #b)
                 Y.append(obs)
+                u = [-3,-1.5,0,1.5,3][action]
+                U.append(u)
                 Rewards.append(reward)
                 time.sleep(1/60) #b)
                 env.render() #b)
@@ -299,6 +302,10 @@ def show(Q,env):
             env.close()
     
     Y = np.array(Y)
+    U = np.array(U)
+
+    np.savez('DQN-simulation-data.npz', Y=Y, U=U) #save the trajectory and control inputs for later use
+
     Rewards = np.array(Rewards)
     fig, axs = plt.subplots(4, 1, figsize=(8, 10))
     axs[0].plot(Y[:,0])

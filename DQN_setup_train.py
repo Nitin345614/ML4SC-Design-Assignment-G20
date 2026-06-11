@@ -28,7 +28,7 @@ class DQN(nn.Module):
         return self.lay2(self.F1(self.lay1(obs)))  
 
 
-def rollout(Q, env, epsilon=0.1, N_run_timesteps=10_000): 
+def rollout(Q, env, epsilon=0.1, num_iterations=10_000): 
     #save the following (use .append)
     Start_state = [] #hold an array of (x_t)
     Actions = [] #hold an array of (u_t)
@@ -40,7 +40,7 @@ def rollout(Q, env, epsilon=0.1, N_run_timesteps=10_000):
     with torch.no_grad():
         
         obs, info = env.reset()  
-        for i in range(N_run_timesteps):  
+        for i in range(num_iterations):  
             if np.random.uniform()>epsilon:  
                 Qnow = Qfun(obs)  
                 action = np.argmax(Qnow)  
@@ -79,13 +79,13 @@ def eval_Q(Q,env, run_timesteps=200):
         print(f"[done]")
         return rewards_acc  
 
-def DQN_run_timesteps(Q, optimizer, env, gamma=0.98, use_target_net=False, N_epsilons=21, N_run_timesteps=20000, \
+def DQN_rollout(Q, optimizer, env, gamma=0.98, use_target_net=False, N_epsilons=21, num_iterations=20000, \
                 N_epochs_per_epsilon=10, batch_size=32, N_evals=10, target_net_update_feq=100, epsilon_values=None):
     """
     Trains the Deep Q Network (DQN) using the rollout data.
     """
     best = -float('inf')
-    torch.save(Q.state_dict(),' Q-checkpoint-setup-train')
+    torch.save(Q.state_dict(),'Q-checkpoint-setup-train')
     try:
         if epsilon_values is None:
             epsilon_values = [1.0 - iteration/(N_epsilons-1) for iteration in range(N_epsilons)]
@@ -94,7 +94,7 @@ def DQN_run_timesteps(Q, optimizer, env, gamma=0.98, use_target_net=False, N_eps
             print(f'Rollout iter={iteration:2d} with epsilon={epsilon:.2%}...')
 
             #2. rollout
-            Start_state, Actions, Rewards, End_state, Terminal = rollout(Q, env, epsilon=epsilon, N_run_timesteps=N_run_timesteps) #e) 2.
+            Start_state, Actions, Rewards, End_state, Terminal = rollout(Q, env, epsilon=epsilon, num_iterations=num_iterations) #e) 2.
             
             #Data conversion, no changes required
             convert = lambda x: [torch.tensor(xi,dtype=torch.float32) for xi in x]
@@ -115,38 +115,31 @@ def DQN_run_timesteps(Q, optimizer, env, gamma=0.98, use_target_net=False, N_eps
                     with torch.no_grad(): #3.
                         if use_target_net:
                             pass
-                            maxQ = torch.max(Qtarget(End_state_batch),dim=1)[0] #g)
+                            maxQ = torch.max(Qtarget(End_state_batch),dim=1)[0]
                         else:
-                            maxQ = torch.max(Q(End_state_batch),dim=1)[0] #e=) 3.
-                    
-                    # action_index = np.stack((np.arange(batch_size),Actions_batch),axis=0)
-                    # ids = np.arange(batch_size)
+                            maxQ = torch.max(Q(End_state_batch),dim=1)[0] 
                     
                     Qnow = Q(Start_state_batch)
-                    # print(f'{action_index.shape=}')
-                    # print(f'{Qnow.shape=}')
                     Qnow = Qnow[np.arange(batch_size), Actions_batch] #Q(x_t,u_t) is given
-                    # print(Rewards_batch.shape, maxQ.shape, Terminal_batch.shape, Qnow.shape)
                     Loss = torch.mean((Rewards_batch + gamma*maxQ*(1-Terminal_batch) - Qnow)**2) #e) 3.
-                    optimizer.zero_grad() #e) 3.
-                    Loss.backward() #e) 3.
-                    optimizer.step() #e) 3.
+                    optimizer.zero_grad()
+                    Loss.backward() 
+                    optimizer.step() 
                 
                 print("=================================")
                 score = np.mean([eval_Q(Q,env) for i in range(N_evals)])
                 print("=================================")
                 
-                # print(f'iteration={iteration} epoch={epoch} Average Reward per episode:',score)
                 if score>best:
                     best = score
                     print('################################# \n new best',best,'saving Q... \n#################################')
-                    torch.save(Q.state_dict(),' Q-checkpoint-setup-train')
+                    torch.save(Q.state_dict(),'Q-checkpoint-setup-train')
             
             print('loading best result')
-            Q.load_state_dict(torch.load(' Q-checkpoint-setup-train'))
+            Q.load_state_dict(torch.load('Q-checkpoint-setup-train'))
     finally: #this will always run even when using the a KeyBoard Interrupt. 
         print('loading best result')
-        Q.load_state_dict(torch.load(' Q-checkpoint-setup-train'))
+        Q.load_state_dict(torch.load('Q-checkpoint-setup-train'))
 
 def show(Q,env,run_timesteps=500):
     with torch.no_grad():
@@ -179,22 +172,20 @@ def show(Q,env,run_timesteps=500):
 if __name__ == '__main__':
     max_episode_steps = 400
     env = gym_unbalanced_disk.UnbalancedDisk_exp_sincos(umax = 3,dt = 0.025)
-    # env = gym.wrappers.TimeLimit(env,max_episode_steps=max_episode_steps)
 
     gamma = 0.85
     batch_size = 32
     N_epsilons = 3
-    N_run_timesteps = 500
-    N_epochs_per_epsilon = 3 #f=)
-    N_evals = 3 #f=)
-    lr = 0.035 #given
+    num_iterations = 600
+    N_epochs_per_epsilon = 3
+    N_evals = 3 
+    lr = 0.035
     epsilon_values = [0.4, 0.5, 0.6]
 
-    # assert isinstance(env.action_space,gym.spaces.Discrete), 'action space requires to be discrete'
     Q = DQN(env, state_dim=3, action_dim=5)
-    Q.load_state_dict(torch.load('Q-checkpoint-setup-train-1st-working'))
+    Q.load_state_dict(torch.load('Q-checkpoint-metastable'))
     optimizer = torch.optim.Adam(Q.parameters(),lr=lr) #low learning rate
-    DQN_run_timesteps(Q, optimizer, env, use_target_net=True, gamma=gamma, N_epsilons=N_epsilons, \
-                N_run_timesteps=N_run_timesteps, N_epochs_per_epsilon=N_epochs_per_epsilon, N_evals=N_evals, epsilon_values=epsilon_values)
+    DQN_rollout(Q, optimizer, env, use_target_net=True, gamma=gamma, N_epsilons=N_epsilons, \
+                num_iterations=num_iterations, N_epochs_per_epsilon=N_epochs_per_epsilon, N_evals=N_evals, epsilon_values=epsilon_values)
 
     show(Q,env, 300)
