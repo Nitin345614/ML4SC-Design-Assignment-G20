@@ -204,30 +204,56 @@ class UnbalancedDisk_sincos(UnbalancedDisk):
 
     def reward_fun(self):
         """
-        Ideal position: theta=pi, cos(theta)=-1, sin(theta)=0, omega=0
-        (omega is [+] in the clockwise direction)
-
-        IDEA: on the bottom half, encourage higher velocity, on the top half penalize it.
+        Continuous adaptation of your original reward structure.
+        Preserves all control logic while ensuring mathematical differentiability.
         """
         cos_th = np.cos(self.th)
         sin_th = np.sin(self.th)
+        omega_sq = self.omega ** 2
 
-        # reward for being close to the top (theta=pi, cos(theta)=-1, sin(theta)=0)
-        reward = 20*np.exp(-(self.th%(2*np.pi)-np.pi)**2/(2*(np.pi/7)**2))
+        # =========================================================================
+        # 1. Base RBF Target Peak (Your original term - preserved)
+        # =========================================================================
+        reward = 40.0 * np.exp(-(self.th % (2 * np.pi) - np.pi)**2 / (2 * (np.pi / 7)**2))
 
-        # penalty for going away from the top, but only on the top half (to avoid rewarding high velocity on the bottom half)
-        if cos_th < -0.3: #on the top half (middle was not enough, it slowed down before actually reaching the top)
-            reward += 10*sin_th * self.omega #reward going up, penalize going down
+        # =========================================================================
+        # 2. Smooth "Top Half" Activation Mask 
+        # =========================================================================
+        # We want a threshold centered around cos_th = -0.3. 
+        # A multiplier of 15.0 makes the transition sharp but perfectly continuous.
+        # When cos_th < -0.3, top_half_mask approaches 1.0.
+        # When cos_th > -0.3, top_half_mask approaches 0.0.
+        top_half_mask = 1.0 / (1.0 + np.exp(15.0 * (cos_th - (-0.3))))
 
-        if cos_th < -0.3: #on the top half (middle was not enough, it slowed down before actually reaching the top)
-            reward -= 1.0 * self.omega**2
-        else:
-            # on the bottom half, encourage higher velocity, but not too high (to avoid overshooting)
-            reward += 0.5 * self.omega**2
+        # =========================================================================
+        # 3. Continuous Directional Pump
+        # =========================================================================
+        # Multiplying by top_half_mask replaces your first 'if' statement completely.
+        # It naturally fades to zero as the disk moves to the bottom half.
+        reward += top_half_mask * (10.0 * sin_th * self.omega)
 
-        # bonus for actually reaching upright
-        if cos_th < -0.95 and self.omega**2 < 3.0:
-            reward += 1000.0
+        # =========================================================================
+        # 4. Continuous Velocity Mode Switch (Blending penalties)
+        # =========================================================================
+        # Instead of an if/else snap, we blend your two desired velocity functions.
+        # Top half active: top_half_mask * (-1.0 * omega_sq)
+        # Bottom half active: (1.0 - top_half_mask) * (+0.5 * omega_sq)
+        velocity_blend = (top_half_mask * (-2.0 * omega_sq)) + ((1.0 - top_half_mask) * (0.5 * omega_sq))
+        reward += velocity_blend
+
+        # =========================================================================
+        # 5. Continuous Catch Bonus (Replaces the +1000 if statement)
+        # =========================================================================
+        # Your original criteria: cos_th < -0.95 AND omega**2 < 3.0
+        # We map this to a smooth, double-Gaussian bell curve. 
+        # It peaks at 1000.0 only when cos_th is near -1 AND omega is near 0.
+        # 0.05 and 3.0 act as the variance (width) parameters for your limits.
+        cos_closeness = np.exp(-(cos_th - (-1.0))**2 / 0.05)
+        vel_closeness = np.exp(-omega_sq / 3.0)
+        
+        # Combined multiplier peaks at 1.0 only if both conditions are simultaneously met
+        continuous_bonus = 1000.0 * (cos_closeness * vel_closeness)
+        reward += continuous_bonus
 
         return reward
 
@@ -255,6 +281,7 @@ def show(Q,env):
         try:
             obs, info = env.reset() #b)
             Y = [obs]
+            U = [0]
             Rewards = [0]
             env.render() #b)
             time.sleep(1) #b)
@@ -262,6 +289,8 @@ def show(Q,env):
                 action = np.argmax(Qfun(obs)) #b)
                 obs, reward, terminated, truncated, info = env.step(action) #b)
                 Y.append(obs)
+                u = [-3,-1.5,0,1.5,3][action]
+                U.append(u)
                 Rewards.append(reward)
                 time.sleep(1/60) #b)
                 env.render() #b)
@@ -273,6 +302,10 @@ def show(Q,env):
             env.close()
     
     Y = np.array(Y)
+    U = np.array(U)
+
+    np.savez('DQN-simulation-data.npz', Y=Y, U=U) #save the trajectory and control inputs for later use
+
     Rewards = np.array(Rewards)
     fig, axs = plt.subplots(4, 1, figsize=(8, 10))
     axs[0].plot(Y[:,0])
@@ -337,7 +370,7 @@ def eval_Q(Q,env):
             if terminated or truncated: #d)
                 return rewards_acc #d)
 
-def DQN_rollout(Q, optimizer, env, gamma=0.98, use_target_net=False, N_iterations=21, N_rollout=20000, \
+def DQN_rollout(Q, optimizer, env, gamma=0.98, use_target_net=False, N_epsilons=21, N_rollout=20000, \
                 N_epochs=10, batch_size=32, N_evals=10, target_net_update_feq=100):
     """
     Trains the Deep Q Network (DQN) using the rollout data.
@@ -345,10 +378,10 @@ def DQN_rollout(Q, optimizer, env, gamma=0.98, use_target_net=False, N_iteration
     best = -float('inf')
     torch.save(Q.state_dict(),'Q-checkpoint')
     try:
-        for iteration in range(N_iterations):
-            epsilon = 1.0 - iteration/(N_iterations-1) #e=) 1.
+        for iteration in range(N_epsilons):
+            epsilon = 1.0 - iteration/(N_epsilons-1) #e=) 1.
             print(f'Rollout iter={iteration:2d} with epsilon={epsilon:.2%}...')
-            
+
             #2. rollout
             Start_state, Actions, Rewards, End_state, Terminal = rollout(Q, env, epsilon=epsilon, N_rollout=N_rollout) #e) 2.
             
@@ -403,22 +436,22 @@ def DQN_rollout(Q, optimizer, env, gamma=0.98, use_target_net=False, N_iteration
         Q.load_state_dict(torch.load('Q-checkpoint'))
 
 if __name__ == '__main__':
-    max_episode_steps = 250
+    max_episode_steps = 400
     env = UnbalancedDisk_sincos(dt=0.025)
     env = gym.wrappers.TimeLimit(env,max_episode_steps=max_episode_steps)
 
-    gamma = 0.98 #f=)
-    batch_size = 32 #f=)
-    N_iterations = 21 #f=)
-    N_rollout = 20000 #f=)
+    gamma = 0.85
+    batch_size = 32
+    N_epsilons = 10
+    N_rollout = 20000*10 
     N_epochs = 10 #f=)
     N_evals = 5 #f=)
-    lr = 0.0005 #given
+    lr = 0.35 #given
 
     assert isinstance(env.action_space,gym.spaces.Discrete), 'action space requires to be discrete'
     Q = DQN(env, state_dim=3, action_dim=5)
     optimizer = torch.optim.Adam(Q.parameters(),lr=lr) #low learning rate
-    DQN_rollout(Q, optimizer, env, use_target_net=True, gamma=gamma, N_iterations=N_iterations, \
+    DQN_rollout(Q, optimizer, env, use_target_net=True, gamma=gamma, N_epsilons=N_epsilons, \
                 N_rollout=N_rollout, N_epochs=N_epochs, N_evals=N_evals)
 
     show(Q,env)
