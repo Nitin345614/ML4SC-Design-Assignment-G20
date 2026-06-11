@@ -1,0 +1,290 @@
+# CLASSICAL GP
+
+width = 0.1
+noise = 0.01
+
+classic_start = time.time()
+f,cov,reg = post(x1,x2,y1,width,kernel,noise)
+var = np.diag(cov)[:,None]
+classic_end = time.time()
+classic_run = classic_end - classic_start
+classic_msll = MSLL(y1,f,noise,var)
+
+f = f[:,0]
+var = var[:,0]
+
+demonstrate(full_range,y1,f,var,testpoints=full_range,name='Classic GP')
+
+
+
+
+# SD GP
+
+env_sd = environment()
+
+width_sd = 0.5
+noise_sd = 0.1
+M_sd = 500
+
+sd_start = time.time()
+
+ker_sd =  WhiteKernel(noise_level=noise_sd, noise_level_bounds=(1e-9, 1e1))  + RBF(length_scale=width_sd)# + ConstantKernel() #DotProduct()   #a=)
+
+f_sd,var_sd,include_sd,cov_sd,testpoints_sd,reg_sd = sd_algo(x1,x2,y1,M_sd,width_sd,ker_sd,noise_sd,env_sd,testiness=0.01)
+
+sd_end = time.time()
+sd_run = sd_end - sd_start
+
+testpoints_sd = (np.mod(range(N),20)==0)
+f_sd,cov_sd = reg_sd.predict(x2[testpoints_sd],return_cov=True)
+var_sd = np.diag(cov_sd)
+
+sd_msll = MSLL(y1[testpoints_sd,:],f_sd,noise_sd,var_sd)
+sd_rmse = np.mean((y1[testpoints_sd]-f_sd)**2)**0.5
+
+print(sd_rmse*norm_y)
+print(norm_y)
+
+name = "SD GP with" + str(M_sd) + " points"
+demonstrate(full_range,y1,f_sd,var_sd,testpoints_sd,name)
+
+
+
+
+# PP GP
+
+
+env_pp = environment()
+width_pp = 0.5
+noise_pp = 0.1
+ker_pp = rbf
+
+pp_start = time.time()
+f_pp,cov_pp = post(x1,x2,y1,width_pp,ker_pp,noise_pp,environment=env_pp,project=True,included=include_sd)
+var_pp = np.diag(cov_pp)[:,None]
+pp_end = time.time()
+pp_run = pp_end - pp_start + sd_run
+pp_msll = MSLL(y1,f_pp,noise_pp,var_pp,project=True,included=include_sd)
+
+f_pp = f_pp[:,0]
+var_pp = var_pp[:,0]
+
+name = 'Projective GP'
+testpoints_pp = np.ones([N],dtype="bool")
+demonstrate(full_range,y1,f_pp,var_pp,testpoints_pp,name)
+
+
+
+
+
+
+
+
+
+def rbf (x1, x2, width):
+    return np.exp(- (np.sum((x1 - x2)**2))/width)
+
+def rbf_clip (x1, x2, width):
+    euc = np.mean((x1 - x2)**2)
+    if euc>width:
+        return 0
+    else:
+        return np.exp(- euc/width)
+
+def uniform (x1, x2, width):
+    return (np.mean((x1 - x2)**2)>=width)*0.5
+
+
+
+def sd_algo(x1,x2,y,M_sd,width,kernel,noise,environment,testiness=0.5):
+    N = y.shape[0]
+    included = np.array(np.zeros(N),dtype="bool")
+    i = np.random.randint(low=0,high=N-1)
+    included[i] = True
+
+    testpoints = np.random.uniform(low=0,high=1,size=[N]) > (1-testiness)
+
+    for m in tqdm(range(M_sd)):
+        f,cov,reg = post(x1[included,:],x2[testpoints,:],y1[included,:],width,kernel,noise,environment)
+        var = np.diag(cov)
+        i_new = np.argmax(var)
+        included[i_new] = True
+    
+    if environment.quiet==False: return f,var,included,cov,testpoints,reg
+    if environment.quiet==True: return f,included,cov,reg
+
+
+def ARX_load_input(u,y,batches=1,order=1):
+    n = u.shape[0]
+    N = int(n/batches)
+    ux = np.concat(([0],u),axis=0)
+    yx = np.concat(([0],y),axis=0)
+
+    ux_temp = np.zeros([n,order])
+    yx_temp = np.zeros([n,order])
+
+    for i in range(batches):
+        ux_temp[i*N:((i+1)*N),:] = scipy.linalg.toeplitz(u[i*N:((i+1)*N)])[:,0:order]
+        yx_temp[i*N:((i+1)*N),:] = scipy.linalg.toeplitz(y[i*N:((i+1)*N)])[:,0:order]
+
+    ux = np.tril(ux_temp,k=-1)[0:n,0:order]
+    yx = np.tril(yx_temp,k=-1)[0:n,0:order]
+    
+    return np.concat((ux,yx),axis=1)
+
+
+
+#scaler = StandardScaler()
+#readout_y_tra = scaler.fit_transform(readout_y_tra[:,None])[:,0]
+#readout_u_tra = scaler.fit_transform(readout_u_tra[:,None])[:,0]
+#
+#readout_y_val = scaler.fit_transform(readout_y_val[:,None])[:,0]
+#readout_u_val = scaler.fit_transform(readout_u_val[:,None])[:,0]
+
+#x_tra = ARX_load_input(readout_u_tra,readout_y_tra,batches=100,order=order)
+#x_val = ARX_load_input(readout_u_val,readout_y_val,batches=100,order=order)
+
+
+
+
+
+
+
+def BCM_predict(x_test,reg_bcm,kernel,width_bcm,partitions_used,N,beta=1):
+    t_bcm = x_test.shape[0]
+    prediction_blocks = len(partitions_used)
+    #Initialisation
+    f_bcm = np.array(np.zeros([t_bcm, prediction_blocks]))
+    f_bcm_run = np.array(np.zeros(t_bcm))
+    var_bcm = f_bcm
+    include_bcm = np.array(np.zeros([N, prediction_blocks]),dtype="bool")
+    precision = np.array(np.zeros([t_bcm, prediction_blocks]))
+    precision_run = np.array(np.zeros([t_bcm]))
+
+    #accumulating and combining predictions
+    for i in range(prediction_blocks):
+        f_bcm[:,i], precision[:,i] = reg_bcm[int(partitions_used[i])].predict(x_test,return_std=True)
+
+        precision[:,i] = precision[:,i]**-beta
+        precision_run = precision_run + precision[:,i]
+        f_bcm_run = f_bcm_run + precision[:,i]*f_bcm[:,i]
+    
+    precision_run = precision_run**(1/beta)
+    #print(precision_run)
+    K22 = slice(x_test,x_test,kernel,width_bcm,axis=0)
+    cov_bcm = ( -(prediction_blocks-1)*(K22**-1) + precision_run)**-1
+    var_bcm = cov_bcm
+    f_bcm = (cov_bcm*f_bcm_run)
+    f_bcm = f_bcm/np.std(f_bcm)
+
+    return f_bcm,var_bcm/np.std(f_bcm)
+
+
+
+
+    def BCM_validate(x22,y1,reg_bcm,kernel,width_bcm,testpoints_bcm,k_folds,p_bcm,v_bcm,N,beta=1):
+    
+    nbcm_rmse = np.array(np.zeros(k_folds))
+    for k in range(k_folds):
+        p_val = np.random.choice(np.array(range(p_bcm)),size=v_bcm,replace=False)  #generate random indices of PARTITIONS to use for validation
+        p_train = np.array([item for item in range(p_bcm) if item not in p_val])
+
+        #p_train = np.array(range(p_bcm))
+        #p_val = np.array(range(v_bcm))+p_bcm
+
+        #print("validation parts: ", p_val, "training parts: ", p_train)
+
+        valpoints = np.array(np.zeros(N,dtype='bool'))
+        for p in p_val:
+            valpoints = valpoints + (np.mod(np.array(range(N))+int(p),p_bcm)==0)  #This computes the indices of the DATAPOINTS to use for validation from the partitions
+        f_bcm,var_bcm = BCM_predict(x22[valpoints],reg_bcm,kernel,width_bcm,p_train,N,beta) #the prediction is made only on validation for most pessimistic estimate possible
+        nbcm_rmse[k] = sklearn.metrics.root_mean_squared_error(y1[valpoints], f_bcm)
+
+    return nbcm_rmse
+
+
+
+    def slice(x1,x2,kernel,width,axis=1):
+    n1 = x1.shape[0]
+    n2 = x2.shape[0]
+    dim = x1.shape[1]
+
+    if dim != x2.shape[1]:
+        print("incompatible input dimensions")
+        return
+    if (n1!=n2)&(axis==0):
+        print("incompatible input lengths")
+        return
+
+    if axis==0:
+        out = np.zeros([n1])
+        for i in range(n1):
+            out[i] = kernel(x1[i,:],x2[i,:],width)
+        return out
+    else:
+        out = np.zeros([n1, n2])
+        for i in range(n1):
+            for j in range(n2):
+                out[i,j] = kernel(x1[i,:],x2[j,:],width)
+        return out
+
+def Kcomp(x1,x2,width,kernel,project=False,included=0):
+    if project==True:
+        xm = x1[included]
+        Kmm = slice(xm,xm,kernel,width)
+        Km1 = slice(xm,x1,kernel,width)
+        #K1m = Km1.T
+        Km2 = slice(xm,x2,kernel,width)
+        #K2m = Km2.T
+        K22 = slice(x2,x2,kernel,width)
+        return Kmm,Km1,Km2,K22
+    else:
+        K11 = slice(x1,x1,kernel,width)
+        K12 = slice(x1,x2,kernel,width)
+        #K21 = K12.T
+        K22 = slice(x2,x2,kernel,width)
+        return K11,K12,K22
+
+def post(x1,x2,y,width,kernel,noise,environment,project=False,included=None):
+    N = len(x1)
+    if project==True:
+        Kmm,Km1,K1m,Km2,K2m,K22 = Kcomp(x1,x2,width,kernel,project,included)
+        f = Km2.T@np.linalg.inv(noise**2 *Kmm + Km1@Km1.T)@Km1@y
+        
+        Kmm_inv = np.linalg.inv(Kmm)
+        err_inv = np.linalg.inv(Kmm + Km1@K1m/(noise**2))
+        cov = K22 - Km2.T@(Kmm_inv - err_inv)@Km2
+        return f,cov
+
+    else:
+        #K11,K12,K22 = Kcomp(x1,x2,width,kernel,project)
+        #K11_inv = np.linalg.inv(K11 + np.eye(N)*noise**2)
+        #A = K12.T@K11_inv
+        #f = A@y
+        #cov = K22 - A@K12
+
+        reg = GaussianProcessRegressor(kernel,alpha=environment.alpha,n_restarts_optimizer=environment.n_restarts_optimizer) 
+        reg.fit(x1,y)
+        f, cov = reg.predict(x2,return_cov=True)
+
+        #f = K12.T@K11_inv@y
+        #cov = K22 - K12.T@K11_inv@K12
+        return f,cov,reg
+
+
+def MSLL(y1,y2,noise,var,project=False,included=0):
+    if y1.ndim > 1: y1 = y1[:,0]
+    if y2.ndim > 1: y2 = y2[:,0]
+    if var.ndim > 1: var = var[:,0]
+
+    star = noise**2 + var
+    log_loss = ( 0.5 * np.log(2*np.pi*star)) + ( (y1 - y2)**2 / (2*star))
+
+    if project==False:
+        simple_mean, simple_var =  np.mean(y1), np.std(y1)**2
+    else:
+        simple_mean, simple_var =  np.mean(y1[included]), np.std(y1[included])**2
+
+    simple_star = noise**2 + simple_var
+    simple_loss = ( 0.5 * np.log(2*np.pi*simple_var)) + ( (y1 - simple_mean)**2 / (2*simple_var))
+    return np.mean(log_loss - simple_loss)
