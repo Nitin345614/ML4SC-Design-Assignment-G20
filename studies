@@ -1,0 +1,5 @@
+For A2C with SB3
+
+{'num_actor_layers': 2, 'num_critic_layers': 3, 'actor_layer0_size': 67, 'actor_layer1_size': 61, 
+'critic_layer0_size': 77, 'critic_layer1_size': 18, 'critic_layer2_size': 75, 'lr1': 0.007150645414764451, 'lr3': 
+0.007982829376241094, 'alpha_critic': 0.7975616158717067, 'alpha_entropy': 0.027445649596788302}

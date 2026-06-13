@@ -288,3 +288,108 @@ def MSLL(y1,y2,noise,var,project=False,included=0):
     simple_star = noise**2 + simple_var
     simple_loss = ( 0.5 * np.log(2*np.pi*simple_var)) + ( (y1 - simple_mean)**2 / (2*simple_var))
     return np.mean(log_loss - simple_loss)
+
+
+    def reset(self,seed=None):
+        self.th = np.random.normal(loc=0,scale=0.001)
+        self.omega = np.random.normal(loc=0,scale=0.001)
+        self.u = 0
+        self.counter = 0
+        return self.get_obs(), {}
+
+def step(self, action):
+        #convert action to u
+        self.u = action #continuous
+        # self.u = [-3,-1,0,1,3][action] #discrate
+        # self.u = [-3,3][action] #discrate
+
+        ##### Start Do not edit ######
+        self.u = np.clip(self.u,-self.umax,self.umax)
+        def f(t,y):
+            th, omega = y
+            dthdt = omega
+            friction = self.gamma*omega + self.Fc*np.tanh(omega/self.coulomb_omega)
+            domegadt = -self.omega0**2*np.sin(th+self.delta_th) - friction + self.Ku*self.u
+            return np.array([dthdt, domegadt])
+        sol = solve_ivp(f,[0,self.dt],[self.th,self.omega]) #integration
+        self.th, self.omega = sol.y[:,-1]
+        ##### End do not edit   #####
+        self.counter += 1
+        reward = self.reward_fun(self)
+        return self.get_obs(), reward, (self.counter>100), (self.counter>100), {}
+
+
+
+
+class sinus(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, x):
+        # Assuming x has shape [batch_size, features]
+        # Apply different operations to different feature indices
+        x_sin = torch.sin(x[:, 0:1])  # sine of first feature
+        #x_square = x[:, 1:2] ** 2     # square of second feature
+        x_identity = x[:, 1:]         # pass through other features
+        
+        return torch.cat([x_sin, x_identity], dim=1)
+    
+
+
+class CustomFeatures(BaseFeaturesExtractor):
+    """
+    :param observation_space: (gym.Space)
+    :param features_dim: (int) Number of features extracted.
+        torchis corresponds to torche number of unit for torche last layer.
+    """
+
+    def __init__(self, observation_space: gym.spaces.Box, features_dim: int = 2):
+        super().__init__(observation_space, features_dim)
+        n_input_channels = observation_space.shape[0]
+        self.network = nn.Sequential(
+            sinus(),
+            #nn.Linear(n_input_channels, 64),
+            #nn.Tanh(),
+            #nn.Linear(64, 1),
+            #nn.Tanh(),
+            nn.Flatten()
+        )
+
+        # Compute shape by doing one forward pass
+        with torch.no_grad():
+            n_flatten = self.network(
+                torch.as_tensor(observation_space.sample()[None]).float()
+            ).shape[1]
+
+        #self.linear = nn.Sequential(nn.Linear(n_flatten, features_dim), nn.reLU())
+
+    def forward(self, observations: torch.Tensor) -> torch.Tensor:
+        #return self.linear(self.network(observations))
+        return (self.network(observations))
+
+class LossRecorderCallback(BaseCallback):
+    def __init__(self, verbose=0):
+        super().__init__(verbose)
+        self.losses = []
+        self.policy_losses = []
+        self.value_losses = []
+        self.entropy_losses = []
+        self.log_std = []
+        self.th = []
+        self.omega = []
+        #self.step
+        
+    def _on_step(self):
+        # Access logger values after each training step
+        if 'train/loss' in self.model.logger.name_to_value:
+            self.losses.append(self.model.logger.name_to_value['train/loss'])
+        if 'train/policy_loss' in self.model.logger.name_to_value:
+            self.policy_losses.append(self.model.logger.name_to_value['train/policy_loss'])
+        if 'train/value_loss' in self.model.logger.name_to_value:
+            self.value_losses.append(self.model.logger.name_to_value['train/value_loss'])
+        if 'train/entropy_loss' in self.model.logger.name_to_value:
+            self.entropy_losses.append(self.model.logger.name_to_value['train/entropy_loss'])
+        self.log_std.append((self.model.policy.log_std).detach().numpy())
+        self.th.append((env.th)%(2*math.pi))
+        self.omega.append(env.omega)
+        return True
