@@ -393,3 +393,27 @@ class LossRecorderCallback(BaseCallback):
         self.th.append((env.th)%(2*math.pi))
         self.omega.append(env.omega)
         return True
+
+
+#Normalise all data
+
+#norm_y = np.std(Ytrain)
+#norm_x = np.std(Xtrain,axis=0)
+#
+#mean_y = np.mean(Ytrain)
+#mean_x = np.mean(Xtrain,axis=0)
+#
+#Xtrain, Ytrain = Xtrain/norm_x, Ytrain/norm_y
+#
+#norm_y_val = np.std(Yval_target)
+#norm_x_val = np.std(Xval_target,axis=0)
+#mean_y_val = np.mean(Yval_target)
+#mean_x_val = np.mean(Xval_target,axis=0)
+#
+#Xval_target, Yval_target = Xval_target/norm_x_val, Yval_target/norm_y_val
+#
+#print(norm_x)
+#print(norm_y)
+#
+#print(norm_x_val)
+#print(norm_y_val)
